@@ -72,6 +72,16 @@ Syntax may change in the future. To set a formula as value, create an Ex object 
 
 If `doc` is a `persistent_doc.document.Document`, ``doc['foo.parent.3.2']`` gives `foo`'s parent's fourth child's second child. Function calls and operations cannot be used with `Document.__getitem__` (instead use them outside, in Python ``f(doc['foo.p1'], doc['bar.p1'])``).
 
+## Formula reevaluation
+
+There are three reevaluation strategies
+
+- **cached** *(default)*: The formula is reevaluated when a term it depends on changes. The result is cached for reads.
+- **reeval**: The formula is reevaluated every time it is read.
+- **on first read**: The formula is reevaluated the first time it is read after one of the terms it depends on has changed. The result is cached for reads.
+
+The `calc` parameter is passed to `Ex` to indicate which one to use. For example ``Ex(`foo + 3, calc="reeval")``. It is thus possible to have a document with mixed reevaluation strategies.
+
 ## Expr objects
 
 To get the object for a formula instead of its value, use `doc.get_expr('foo.bar')` instead of `doc['foo.bar']`.
@@ -99,6 +109,23 @@ If there's only one document, `persistent_doc.document.default_doc` should be se
 ### Conventions
 
 Parent sets the child's `.parent`.
+
+### numpy
+
+`numpy` isn't really a requirement but since `numpy` 1.13, equality test behave differently and some of the polymorphism doesn't work otherwise. `document.py` contains an alternate definition of `equal` that can be used if there are no numpy arrays as values.
+
+### mutable values
+
+Mutable values are expected *not* to be mutated. They should instead be replaced.
+
+    doc['foo.arr'] = numpy.array([1, 2])
+    doc['foo.arr'] = doc['foo.arr'] + numpy.array([1, 1])
+
+instead of
+
+    arr = numpy.array([1, 2])
+    doc['foo.arr'] = arr
+    arr += numpy.array([1, 1])
 
 ### Todo
 
