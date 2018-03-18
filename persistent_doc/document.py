@@ -399,6 +399,14 @@ class FrozenNode(PClass):
         return out
 
     def change(self, **kwargs):
+        # Should do nothing if values are equal!
+        # But expr should be considered non-equal.
+        if kwargs.keys() == ['doc']:
+            for key, value in kwargs.items():
+                if not equal(getattr(self, key, None), value):
+                    break
+            else:
+                return self
         new_node = self.set(**kwargs)
         if self.doc is not None and\
            (self.doc != new_node.doc or self["id"] != new_node["id"]):
@@ -696,7 +704,10 @@ class Document(UndoLog):
         #print self.dirty
         while self.dirty:
             # Ignoring path because they are already always in sync
-            orig = node = self.get_node(self.dirty.pop())
+            id_ = self.dirty.pop()
+            if id_ not in self.m:
+                continue
+            orig = node = self.get_node(id_)
             #print "inner", orig['id'], self.dirty
             logger.debug("Updating %s" % node["id"])
             while node is not None:
