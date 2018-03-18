@@ -9,13 +9,13 @@ class TransformDict(PClass):
     doc = field()
     order = field(initial=pvector)
     dict_ = field(initial=pmap)
-    def __new__(cls, node, doc, dict_=pmap(), order=None):
+    def __new__(cls, node, doc, dict_=pmap(), order=None, **kwargs):
         order = pvector(sorted(dict_.keys())) if order is None else order
         if type(dict_) != map_type:
             dict_ = pmap(dict_)
         assert(len(dict_) == len(order))
         return PClass.__new__(cls, node=node, doc=doc, order=order,
-                              dict_=dict_)
+                              dict_=dict_, **kwargs)
 
     def __setitem__(self, key, value):
         if type(value) == Ex:
