@@ -33,7 +33,7 @@ class TransformDict(PClass):
                         dict_=self.dict_.set(key, value))
 
     def clean_expr(self, key):
-        value = self.get_raw(key)
+        value = self.get_expr(key)
         if type(value) == Expr:
             value.remove_deps()
 
@@ -54,7 +54,7 @@ class TransformDict(PClass):
         else:
             return default
 
-    def get_raw(self, key):
+    def get_expr(self, key):
         return self.dict_.__getitem__(key)
 
     def __delitem__(self, key):

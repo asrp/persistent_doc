@@ -29,21 +29,21 @@ def pmap_crepr(self):
     return "p" + repr(dict(self))
 
 pyrsistent.PMap.__crepr__ = pmap_crepr
-pyrsistent.PMap.get_raw = pyrsistent.PMap.get
+pyrsistent.PMap.get_expr = pyrsistent.PMap.get
 
 # Problem: immutable. Can't really subclass since everything returns a pyrsistent.*
 # instead of values of my class.
 vector_type = type(pvector())
 map_type = type(pmap())
 
-def get_raw(self, key):
+def get_expr(self, key):
     if type(self) == vector_type:
         if type(key) == str and key.lstrip('-').isdigit():
             return self[int(key)]
         return self[key]
-    return self.get_raw(key)
+    return self.get_expr(key)
 
-# vector_type.get_raw = get_raw
+# vector_type.get_expr = get_expr
 
 class Ex(str):
     """ Expression string """
@@ -146,13 +146,16 @@ class Expr(PClass):
                                         rdepend=pset([fullpath]),
                                         scope=self.scope)
             else:
+                logger.debug("Adding rdepend %s to %s" % (fullpath, name))
                 self.scope[name] = v.set(rdepend=v.rdepend.add(fullpath))
+                assert(self.scope.get_expr(name).rdepend == v.rdepend.add(fullpath))
             depend.add(name)
         return Expr(expr=expr,
                     cache=self.cache,
                     path=self.path,
                     depend=depend,
                     dep_vars=dep_vars,
+                    rdepend=self.rdepend,
                     scope=self.scope)
 
     def remove_deps(self):
@@ -184,7 +187,7 @@ class Expr(PClass):
             dep_vars = pvector(var_names(self.expr))
             self = self.wrap_deps(dep_vars, self.expr)
         recalc.debug("Recalculating cache for %s" % self.expr)
-        return self.set(cache=wrap(self.eval_()))
+        return self.set(cache=self.eval_())
 
     @property
     def value(self):
@@ -276,7 +279,8 @@ def wrap_children(node_id, doc, children):
         # Should check doc equality first?
         if child._parent and child._parent.expr[1:] == node_id:
             continue
-        if child.parent is not None:
+        # Hack in case parent and self haven't been added to the document yet!
+        if child.parent is not None and not isinstance(child.parent, EvalError):
             child.parent.remove(child)
         if child.doc != doc:
             child.change(doc=doc, _parent=wrap_id(node_id, doc))
@@ -308,6 +312,8 @@ class FrozenNode(PClass):
 
     def __new__(cls, name=None, params=None, children=(), doc=None, parent=None, _parent=None, _factory_fields=None):
         doc = doc if doc is not None else default_doc
+        children = children if type(children) == vector_type else\
+                   pvector(wrap_children(params["id"], doc, children))
         for key, value in (params or {}).items():
             if type(value) == Ex:
                 value = Expr(scope=doc,
@@ -319,15 +325,14 @@ class FrozenNode(PClass):
             params=params if isinstance(params, map_type) or\
                              isinstance(params, PClass)\
                              else pmap(params),
-            children=children if type(children) == vector_type else\
-                              pvector(wrap_children(params["id"], doc, children)),
+            children=children,
             doc=doc,
             _parent=wrap2(parent, doc) if parent is not None else _parent)
         return self
 
     @property
     def L(self):
-        return self.doc[self["id"]]
+        return self.doc.get_node(self["id"])
 
     def wrap_children(self, args):
         for arg in args:
@@ -364,14 +369,15 @@ class FrozenNode(PClass):
 
     def __iter__(self):
         for child in self.children:
-            yield get_eval(child)
+            child_node = self.doc.current()[child.expr[1:]]
+            yield child_node.cache if type(child_node) == Expr else child_node
 
     def __getitem__(self, key):
         if type(key) == str:
             return self.get_path(key.split("."))
-        return get_eval(get_raw(self, key))
+        return get_eval(get_expr(self, key))
 
-    def get_raw(self, key):
+    def get_expr(self, key):
         if type(key) == int:
             return self.children[key]
         elif type(key) == str and key.lstrip('-').isdigit():
@@ -410,7 +416,7 @@ class FrozenNode(PClass):
         new_node = self.set(**kwargs)
         if self.doc is not None and\
            (self.doc != new_node.doc or self["id"] != new_node["id"]):
-            del self.doc[self["id"]]
+            del self.L
         if new_node.doc is not None:
             #print("Changing %s" % new_node["id"])
             new_node.doc[new_node["id"]] = new_node
@@ -449,9 +455,9 @@ class FrozenNode(PClass):
             elif key == "self":
                 pass
             else:
-                current = get_raw(get_eval(current), key)
-            #elif hasattr(get_eval(current), "get_raw"):
-            #    current = get_eval(current).get_raw(key)
+                current = get_expr(get_eval(current), key)
+            #elif hasattr(get_eval(current), "get_expr"):
+            #    current = get_eval(current).get_expr(key)
             #else:
             #    # Doesn't usually work because key is a str instead of an int
             #    current = get_eval(current)[key]
@@ -491,20 +497,24 @@ class FrozenNode(PClass):
                 value = old_value.set_value(wrap(value))
                 if equal(old_value.value, value):
                     return
-            self = self.doc[self["id"]]
+            self = self.L
             self.change(params=transform(self.params, path, value))
-            if not (type(value) == Expr and equal(old_value.value, value.value)):
+            # Problem: triggers "on first read"
+            #if not (type(value) == Expr and equal(old_value.value, value.value)):
+            if not type(value) != Expr:
                 for rdep in old_value.rdepend:
                     # Should check type here
                     self.doc.reeval(rdep[0], rdep[1])
+            self.doc.dirty.add((self["id"],) + tuple(path))
             self.doc.dirty.add(self["id"])
         else:
             # In case of two changes to the same node!
             if type(value) == Ex:
                 value = Expr(scope=self.doc,
                              path=(self["id"], tuple(path))).set_value(value)
-                self = self.doc[self["id"]]
+                self = self.L
             self.change(params=transform(self.params, path, value))
+            self.doc.dirty.add((self["id"],) + tuple(path))
             self.doc.dirty.add(self["id"])
 
     def params_delete(self, path):
@@ -516,6 +526,20 @@ class FrozenNode(PClass):
 
     def evolver(self):
         return Evolver(self.params, self)
+
+def dep_graph():
+    for node, transform in default_doc.tree_root.L.dfs():
+        for k in node.params:
+            v = node.get_expr(k)
+            if type(v) == Expr:
+                print "%s:%s -> %s" % (node["id"], k, v.dep_vars)
+
+def rdep_graph():
+    for node, transform in default_doc.tree_root.L.dfs():
+        for k in node.params:
+            v = node.get_expr(k)
+            if type(v) == Expr:
+                print "%s:%s <- %s" % (node["id"], k, v.rdepend)
 
 def add_params_function(cls, func):
     def f(self, *args, **kwargs):
@@ -657,6 +681,7 @@ class Document(UndoLog):
                 value = Expr(value=None, scope=self, depend=pset(), rdepend=pset(),
                              path=(key, ())).set_value(value)
             self.log("set", self.m.set(key, value))
+            assert(self.m[key] == value)
             #self.dirty.add(key)
 
     def del_node(self, key):
@@ -671,9 +696,9 @@ class Document(UndoLog):
     def __delitem__(self, key):
         return self.del_path(key.split("."))
 
-    def get_path(self, path):
+    def get_path(self, path, expr=False):
         assert(path)
-        return self.get_node(path[0]).get_path(path[1:])
+        return self.get_node(path[0]).get_path(path[1:], expr)
 
     def set_path(self, path, value):
         assert(path)
@@ -701,10 +726,22 @@ class Document(UndoLog):
             self.set_node(node_id, self.get_node(node_id).reeval())
 
     def sync(self):
+        # Problem: only nodes are dirty, but not their params!
+        # When used, also assuming params are updating their rdepends too!
         #print self.dirty
         while self.dirty:
             # Ignoring path because they are already always in sync
             id_ = self.dirty.pop()
+            if type(id_) == tuple:
+                try:
+                    expr = self.get_path(id_, True)
+                except KeyError:
+                    # Deleted value
+                    continue
+                if type(expr) == Expr:
+                    for rdep in expr.rdepend:
+                        self.reeval(rdep[0], rdep[1])
+                continue
             if id_ not in self.m:
                 continue
             orig = node = self.get_node(id_)
