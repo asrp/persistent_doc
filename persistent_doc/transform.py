@@ -21,11 +21,11 @@ class TransformDict(PClass):
         if type(value) == Ex:
             value = Expr(scope=self.doc,
                          path=(self.node, ["transforms", key])).set_value(value)
-            self = self.doc[self.node + ".transforms"]
+            self = self.doc[self.node].transforms
         print "T __setitem__ %s %s" % (key, value)
         if key in self:
             self.clean_expr(key)
-            self = self.doc[self.node + ".transforms"]
+            self = self.doc[self.node].transforms
             self.change(dict_=self.dict_.set(key, value),
                                order=self.order)
         else:

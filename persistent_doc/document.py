@@ -334,12 +334,13 @@ class FrozenNode(PClass):
     def L(self):
         return self.doc.get_node(self["id"])
 
-    def wrap_children(self, args):
+    def wrap_children(self, args, keep_same_parent=True):
         for arg in args:
             # Parent always sets child's .parent
             # Always remove the node's previous parent (if needed) first
             # which just means update the previous parent to
-            if arg.parent != self and arg.parent is not None:
+            if (not keep_same_parent or arg.parent != self) and\
+               arg.parent is not None and not isinstance(arg.parent, EvalError):
                 arg.parent.remove(arg)
             if arg.doc != self.doc:
                 # What about descendent docs?
@@ -349,28 +350,33 @@ class FrozenNode(PClass):
         return [wrap2(arg, self.doc) for arg in args]
 
     def append(self, element):
-        element = self.wrap_children([element])[0]
-        self.change(children=self.children.append(element))
+        # Could just
+        element = self.wrap_children([element], False)[0]
+        self.change(children=self.L.children.append(element))
         if self.doc:
             self.doc.dirty.add(self["id"])
 
     def extend(self, elements):
-        elements = self.wrap_children(elements)
-        self.change(children=self.children.extend(elements))
+        elements = self.wrap_children(elements, False)
+        self.change(children=self.L.children.extend(elements))
         if self.doc:
             self.doc.dirty.add(self["id"])
 
     def multi_insert(self, index, elements):
-        elements = self.wrap_children(elements)
+        elements = self.wrap_children(elements, False)
+        self = self.L
         self.change(children=self.children[:index] + elements +\
-                    self.children[index:])
+                      self.children[index:])
         if self.doc:
             self.doc.dirty.add(self["id"])
 
     def __iter__(self):
         for child in self.children:
             child_node = self.doc.current()[child.expr[1:]]
+            if type(child_node) == Expr and child_node.expr is not None:
+                bp()
             yield child_node.cache if type(child_node) == Expr else child_node
+            #yield get_eval(child)
 
     def __getitem__(self, key):
         if type(key) == str:
@@ -416,7 +422,9 @@ class FrozenNode(PClass):
         new_node = self.set(**kwargs)
         if self.doc is not None and\
            (self.doc != new_node.doc or self["id"] != new_node["id"]):
-            del self.L
+            # Not sure what this was for. self.L is a @property now.
+            #del self.L
+            pass
         if new_node.doc is not None:
             #print("Changing %s" % new_node["id"])
             new_node.doc[new_node["id"]] = new_node
@@ -519,7 +527,11 @@ class FrozenNode(PClass):
 
     def params_delete(self, path):
         # Need to check for expr values.
-        self.set_path(path[:-1], self.get_path(path[:-1]).remove(path[-1]))
+        if len(path) == 1:
+            self.change(params=self.params.discard(path[-1]))
+        else:
+            # Need to remember the intended use of this one
+            self.set_path(path[:-1], self.get_path(path[:-1]).remove(path[-1]))
 
     def reeval(self, path):
         self.params_transform(path, self.get_path(path, expr=True).reeval())
@@ -682,6 +694,7 @@ class Document(UndoLog):
                              path=(key, ())).set_value(value)
             self.log("set", self.m.set(key, value))
             assert(self.m[key] == value)
+            #assert(equal(self.m[key], value))
             #self.dirty.add(key)
 
     def del_node(self, key):
