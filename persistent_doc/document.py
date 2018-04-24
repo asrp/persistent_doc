@@ -166,6 +166,9 @@ class Expr(PClass):
             v = self.scope.get_expr(name)
             if type(v) == Expr:
                 self.scope[name] = v.set(rdepend=v.rdepend.remove(fullpath))
+        return Expr(expr=None, cache=self.cache, path=self.path,
+                    depend=pset(), dep_vars=pset(), rdepend=self.rdepend,
+                    scope=self.scope)
 
     def eval_(self):
         try:
@@ -350,7 +353,6 @@ class FrozenNode(PClass):
         return [wrap2(arg, self.doc) for arg in args]
 
     def append(self, element):
-        # Could just
         element = self.wrap_children([element], False)[0]
         self.change(children=self.L.children.append(element))
         if self.doc:
@@ -367,6 +369,12 @@ class FrozenNode(PClass):
         self = self.L
         self.change(children=self.children[:index] + elements +\
                       self.children[index:])
+        if self.doc:
+            self.doc.dirty.add(self["id"])
+
+    def set_child(self, index, element):
+        element = self.wrap_children([element], True)[0]
+        self.change(children=self.L.children.set(index, element))
         if self.doc:
             self.doc.dirty.add(self["id"])
 
@@ -390,6 +398,8 @@ class FrozenNode(PClass):
             return self.children[int(key)]
         elif type(key) == slice:
             return [get_eval(child) for child in self.children[key]]
+        elif type(key) == str and "." in key:
+            return self.get_path(key.split("."), True)
         else:
             return self.params[key]
 
@@ -653,6 +663,7 @@ class Document(UndoLog):
         self.log("init", pyrsistent.m())
         self.set_root(root) # Needs to be calculated now
         self.dirty = set() # Should be made into an (ordered) set?
+        self.to_delete = set()
 
     def set_root(self, root):
         self.tree_root = root
@@ -694,7 +705,6 @@ class Document(UndoLog):
                              path=(key, ())).set_value(value)
             self.log("set", self.m.set(key, value))
             assert(self.m[key] == value)
-            #assert(equal(self.m[key], value))
             #self.dirty.add(key)
 
     def del_node(self, key):
@@ -705,6 +715,9 @@ class Document(UndoLog):
 
     def __setitem__(self, key, value):
         return self.set_path(key.split("."), value)
+
+    def __contains__(self, key):
+        return self.m.__contains__(key)
 
     def __delitem__(self, key):
         return self.del_path(key.split("."))
@@ -732,6 +745,21 @@ class Document(UndoLog):
             return self.get_node(path[0], expr=True)
         return self.get_node(path[0]).get_path(path[1:], expr=True)
 
+    def remove_expr(self, path, newval=None, if_expr=False):
+        if newval is None:
+            newval = self[path]
+        expr = self.get_expr(path)
+        if if_expr and not isinstance(expr, Expr):
+            return
+        if expr.expr.calc != "reeval":
+            expr.remove_deps()
+        path = path.split(".")
+        assert(len(path) >= 2)
+        node = self.get_node(path[0])
+        # Should probably be in FrozenNode
+        last_node, last_index = simplify_path(node, path[1:])
+        last_node.change(params=transform(last_node.params, path[1+last_index:], newval))
+
     def reeval(self, node_id, value_path):
         if value_path:
             self.get_node(node_id).reeval(value_path)
@@ -742,6 +770,12 @@ class Document(UndoLog):
         # Problem: only nodes are dirty, but not their params!
         # When used, also assuming params are updating their rdepends too!
         #print self.dirty
+        while self.to_delete:
+            id_ = self.to_delete.pop()
+            node = self[id_]
+            node.deparent()
+            for gc, _ in node.dfs():
+                del self[gc["id"]]
         while self.dirty:
             # Ignoring path because they are already always in sync
             id_ = self.dirty.pop()
