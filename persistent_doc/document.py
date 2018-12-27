@@ -56,7 +56,7 @@ scope = {}
 vars_re = "`([a-zA-Z_][a-zA-Z0-9_.\-]*)"
 # Problem: also contains function names
 def var_names(expr):
-    return re.findall(vars_re, expr)
+    return set(re.findall(vars_re, expr))
 
 def get_eval(v):
     return v if type(v) != Expr else v.value
@@ -145,7 +145,8 @@ class Expr(PClass):
                                         path=name,
                                         rdepend=pset([fullpath]),
                                         scope=self.scope)
-            else:
+            elif fullpath not in v.rdepend:
+                # Break circularity
                 logger.debug("Adding rdepend %s to %s" % (fullpath, name))
                 self.scope[name] = v.set(rdepend=v.rdepend.add(fullpath))
                 assert(self.scope.get_expr(name).rdepend == v.rdepend.add(fullpath))
@@ -515,6 +516,8 @@ class FrozenNode(PClass):
                 value = old_value.set_value(wrap(value))
                 if equal(old_value.value, value):
                     return
+            if equal(old_value, value):
+                return
             self = self.L
             self.change(params=transform(self.params, path, value))
             # Problem: triggers "on first read"
@@ -657,6 +660,9 @@ class UndoLog(object):
     def pprint(self):
         self.root.pprint()
 
+class _NoValue:
+    pass
+
 class Document(UndoLog):
     def __init__(self, root):
         UndoLog.__init__(self)
@@ -704,7 +710,8 @@ class Document(UndoLog):
                 value = Expr(value=None, scope=self, depend=pset(), rdepend=pset(),
                              path=(key, ())).set_value(value)
             self.log("set", self.m.set(key, value))
-            assert(self.m[key] == value)
+            # Max recursion exceeded if checking parent?
+            #assert(self.m[key] == value)
             #self.dirty.add(key)
 
     def del_node(self, key):
@@ -745,8 +752,8 @@ class Document(UndoLog):
             return self.get_node(path[0], expr=True)
         return self.get_node(path[0]).get_path(path[1:], expr=True)
 
-    def remove_expr(self, path, newval=None, if_expr=False):
-        if newval is None:
+    def remove_expr(self, path, newval=_NoValue, if_expr=False):
+        if newval is _NoValue:
             newval = self[path]
         expr = self.get_expr(path)
         if if_expr and not isinstance(expr, Expr):
